@@ -42,7 +42,9 @@ function calculateWeightAndUpdateStatus(player, roomData) {
 
 io.on('connection', (socket) => {
   socket.on('transfer_item', ({ room, targetId, item, amount }) => {
-    const roomInfo = roomsData[room];
+    if (!room) return;
+    const roomKey = room.trim().toLowerCase();
+    const roomInfo = roomsData[roomKey];
     if (!roomInfo) return;
 
     const sender = roomInfo.players[socket.id];
@@ -61,18 +63,19 @@ io.on('connection', (socket) => {
       calculateWeightAndUpdateStatus(target, roomInfo);
 
       roomInfo.log.push(`[INTERCAMBIO] ${sender.username} transfirió ${transferAmount}x ${item} a ${target.username}.`);
-      io.to(room).emit('room_state_update', roomInfo);
+      io.to(roomKey).emit('room_state_update', roomInfo);
     } else {
       roomInfo.log.push(`[ERROR] ${sender.username} intentó enviar ${item} pero no tiene suficiente.`);
-      io.to(room).emit('room_state_update', roomInfo);
+      io.to(roomKey).emit('room_state_update', roomInfo);
     }
   });
 
   console.log(`📡 Dispositivo conectado: ${socket.id}`);
 
   socket.on('send_message', ({ room, username, message }) => {
-    if (!roomsData[room]) return;
-    if (!roomsData[room].chat) roomsData[room].chat = [];
+    if (!room) return;
+    const roomKey = room.trim().toLowerCase();
+    if (!roomsData[roomKey]) roomsData[roomKey] = { players: {}, log: [], chat: [] };
 
     const cleanMessage = message.trim();
     if (!cleanMessage) return;
@@ -84,22 +87,24 @@ io.on('connection', (socket) => {
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-    roomsData[room].chat.push(chatEntry);
-    if (roomsData[room].chat.length > 50) {
-      roomsData[room].chat.shift();
+    roomsData[roomKey].chat.push(chatEntry);
+    if (roomsData[roomKey].chat.length > 50) {
+      roomsData[roomKey].chat.shift();
     }
 
-    io.to(room).emit('room_state_update', roomsData[room]);
+    io.to(roomKey).emit('room_state_update', roomsData[roomKey]);
   });
 
   socket.on('join_room', ({ room, username, role }) => {
-    socket.join(room);
-    if (!roomsData[room]) roomsData[room] = { players: {}, log: [], chat: [] };
+    if (!room) return;
+    const roomKey = room.trim().toLowerCase();
+    
+    socket.join(roomKey);
+    if (!roomsData[roomKey]) roomsData[roomKey] = { players: {}, log: [], chat: [] };
 
-    // Limpieza de sesiones previas con el mismo nombre de usuario para evitar duplicados en la sala[cite: 5]
-    for (const [existingId, existingPlayer] of Object.entries(roomsData[room].players)) {
+    for (const [existingId, existingPlayer] of Object.entries(roomsData[roomKey].players)) {
       if (existingPlayer.username === username) {
-        delete roomsData[room].players[existingId];
+        delete roomsData[roomKey].players[existingId];
       }
     }
 
@@ -111,7 +116,7 @@ io.on('connection', (socket) => {
                            playerRole === 'Cocinero' ? { vendas: 1, madera: 2, chatarra: 4, comida: 5 } :
                            { vendas: 2, madera: 3, chatarra: 3, comida: 2 };
 
-    roomsData[room].players[socket.id] = {
+    roomsData[roomKey].players[socket.id] = {
       id: socket.id,
       username,
       role: playerRole,
@@ -122,39 +127,47 @@ io.on('connection', (socket) => {
       maxWeight: ROLE_STATS[playerRole].maxWeight
     };
 
-    calculateWeightAndUpdateStatus(roomsData[room].players[socket.id], roomsData[room]);
-    roomsData[room].log.push(`[SISTEMA] ${username} se unió como ${playerRole}.`);
-    io.to(room).emit('room_state_update', roomsData[room]);
+    calculateWeightAndUpdateStatus(roomsData[roomKey].players[socket.id], roomsData[roomKey]);
+    roomsData[roomKey].log.push(`[SISTEMA] ${username} se unió como ${playerRole}.`);
+    io.to(roomKey).emit('room_state_update', roomsData[roomKey]);
   });
 
   socket.on('update_inventory', ({ room, item, amount }) => {
-    if (roomsData[room] && roomsData[room].players[socket.id]) {
-      const player = roomsData[room].players[socket.id];
+    if (!room) return;
+    const roomKey = room.trim().toLowerCase();
+    if (roomsData[roomKey] && roomsData[roomKey].players[socket.id]) {
+      const player = roomsData[roomKey].players[socket.id];
       player.inventory[item] = amount;
-      calculateWeightAndUpdateStatus(player, roomsData[room]);
-      roomsData[room].log.push(`[INVENTARIO] ${player.username} tiene ${amount} de ${item}.`);
-      io.to(room).emit('room_state_update', roomsData[room]);
+      calculateWeightAndUpdateStatus(player, roomsData[roomKey]);
+      roomsData[roomKey].log.push(`[INVENTARIO] ${player.username} tiene ${amount} de ${item}.`);
+      io.to(roomKey).emit('room_state_update', roomsData[roomKey]);
     }
   });
 
   socket.on('update_vital', ({ room, playerId, vitalType, amount }) => {
-    if (roomsData[room] && roomsData[room].players[playerId]) {
-      const target = roomsData[room].players[playerId];
+    if (!room) return;
+    const roomKey = room.trim().toLowerCase();
+    if (roomsData[roomKey] && roomsData[roomKey].players[playerId]) {
+      const target = roomsData[roomKey].players[playerId];
       target.vitals[vitalType] = Math.max(0, Math.min(100, target.vitals[vitalType] + amount));
-      io.to(room).emit('room_state_update', roomsData[room]);
+      io.to(roomKey).emit('room_state_update', roomsData[roomKey]);
     }
   });
 
   socket.on('update_status', ({ room, status }) => {
-    if (roomsData[room] && roomsData[room].players[socket.id]) {
-      roomsData[room].players[socket.id].status = status;
-      roomsData[room].log.push(`[ESTADO] ${roomsData[room].players[socket.id].username} ahora está: ${status}`);
-      io.to(room).emit('room_state_update', roomsData[room]);
+    if (!room) return;
+    const roomKey = room.trim().toLowerCase();
+    if (roomsData[roomKey] && roomsData[roomKey].players[socket.id]) {
+      roomsData[roomKey].players[socket.id].status = status;
+      roomsData[roomKey].log.push(`[ESTADO] ${roomsData[roomKey].players[socket.id].username} ahora está: ${status}`);
+      io.to(roomKey).emit('room_state_update', roomsData[roomKey]);
     }
   });
 
   socket.on('use_role_ability', ({ room, action, targetId }) => {
-    const roomInfo = roomsData[room];
+    if (!room) return;
+    const roomKey = room.trim().toLowerCase();
+    const roomInfo = roomsData[roomKey];
     if (!roomInfo) return;
     
     const player = roomInfo.players[socket.id];
@@ -216,7 +229,7 @@ io.on('connection', (socket) => {
       }
     }
     
-    io.to(room).emit('room_state_update', roomInfo);
+    io.to(roomKey).emit('room_state_update', roomInfo);
   });
 
   socket.on('disconnect', () => {
